@@ -1,0 +1,4 @@
+#include "resource.h"  // Asegúrate de que este archivo existe y contiene la definición de IDI_ICON1
+
+// Definición del icono
+IDI_ICON1 ICON "pdf.ico.ico"
