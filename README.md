@@ -14,11 +14,3 @@ Este repositorio contiene varios proyectos organizados por lenguaje de programac
 1. Entra en la carpeta del lenguaje que te interese.
 2. Abre uno de los proyectos.
 3. Compílalo o ejecútalo con las herramientas correspondientes.
-
-### Ejemplos de compilación
-
-- **C**:
-
-  ```bash
-  gcc main.c -o programa
-  ./programa
