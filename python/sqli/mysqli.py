@@ -168,10 +168,6 @@ def interactive_menu():
 
         if choice == '1':
             dbs = extract_databases()
-            # No imprimir la lista completa para evitar redundancia
-            # print("\n[+] Bases de datos encontradas:")
-            # for db in dbs:
-            #     print(f" - {db}")
 
         elif choice == '2':
             db = input("Ingresa el nombre de la base de datos: ").strip()
@@ -179,10 +175,6 @@ def interactive_menu():
                 print("[!] No ingresaste base de datos")
                 continue
             tbls = extract_tables(db)
-            # No imprimir la lista completa para evitar redundancia
-            # print(f"\n[+] Tablas en {db}:")
-            # for t in tbls:
-            #     print(f" - {t}")
 
         elif choice == '3':
             db = input("Ingresa el nombre de la base de datos: ").strip()
@@ -194,10 +186,6 @@ def interactive_menu():
                 print("[!] No ingresaste tabla")
                 continue
             cols = extract_columns(db, tbl)
-            # No imprimir la lista completa para evitar redundancia
-            # print(f"\n[+] Columnas en {tbl}:")
-            # for c in cols:
-            #     print(f" - {c}")
 
         elif choice == '4':
             db = input("Ingresa el nombre de la base de datos: ").strip()
